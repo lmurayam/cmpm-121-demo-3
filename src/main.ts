@@ -13,7 +13,7 @@ import luck from "./luck.ts";
 
 // Elements
 const _app_title: HTMLHeadingElement = document.querySelector("#appTitle")!;
-const _control_panel: HTMLDivElement = document.querySelector("#controlPanel")!;
+const control_panel: HTMLDivElement = document.querySelector("#controlPanel")!;
 const map_element: HTMLDivElement = document.querySelector("#map")!;
 const inventory_element: HTMLDivElement = document.querySelector("#inventory")!;
 
@@ -26,12 +26,14 @@ interface Cell {
 interface Coin {
   cell: Cell;
   serial: number;
-  toString(): string;
 }
 
 interface Cache {
   cell: Cell;
   coins: Coin[];
+  toMomento(): string;
+  fromMomento(momento: string): void;
+  toString(): string;
 }
 
 interface Board {
@@ -44,7 +46,7 @@ interface Board {
 }
 
 // Events
-const _player_moved: Event = new CustomEvent("player-moved");
+const player_moved: Event = new CustomEvent("player-moved");
 const player_inventory_changed: Event = new CustomEvent(
   "player-inventory-changed",
 );
@@ -54,10 +56,8 @@ const OAKES_CLASSROOM: leaflet.LatLng = leaflet.latLng(
   36.98949379578401,
   -122.06277128548504,
 );
-const inventory: Cache = {
-  cell: { i: 0, j: 0 },
-  coins: [],
-};
+const inventory: Cache = createCache(0, 0, 0);
+const momentos: Map<string, string> = new Map<string, string>();
 
 const GAMEPLAY_ZOOM_LEVEL = 19;
 const TILE_DEGREES = 1e-4;
@@ -114,6 +114,8 @@ function transfer(a: Cache, b: Cache, coin: Coin) {
   }
   a.coins.splice(index, 1);
   b.coins.push(coin);
+  momentos.set(a.toString(), a.toMomento());
+  momentos.set(b.toString(), b.toMomento());
 }
 
 // Credits: https://github.com/rndmcnlly/cmpm-121-demo-3/blob/main/src/example.ts
@@ -141,6 +143,8 @@ function createMarker(loc: leaflet.LatLng, text: string, map: leaflet.Map) {
   const marker = leaflet.marker(loc);
   marker.bindTooltip(text);
   marker.addTo(map);
+  clear_layer.addLayer(marker);
+  return marker;
 }
 
 function coordToLatLng(i: number, j: number) {
@@ -150,22 +154,30 @@ function coordToLatLng(i: number, j: number) {
   );
 }
 
-function createCache(i: number, j: number): Cache {
+function createCache(i: number, j: number, num_coins: number): Cache {
   const cache: Cache = {
     cell: { i: i, j: j },
     coins: [],
+    toMomento() {
+      return JSON.stringify(this.coins);
+    },
+    fromMomento(momento: string) {
+      this.coins = JSON.parse(momento);
+    },
+    toString() {
+      return [i, j].toString();
+    },
   };
-  const chance: number = luck([i + j].toString());
-  const num_coins: number = Math.floor(chance * 3) + 1;
   for (let k = 0; k < num_coins; k++) {
     cache.coins.push({
       cell: cache.cell,
       serial: k,
-      toString() {
-        return `${(this.cell.i)}:${(this.cell.j)}#${this.serial}`;
-      },
     });
   }
+  if (num_coins > 0) {
+    momentos.set(cache.toString(), cache.toMomento());
+  }
+
   return cache;
 }
 
@@ -173,7 +185,7 @@ function placeCache(cache: Cache) {
   const position = coordToLatLng(cache.cell.i, cache.cell.j);
   const marker = leaflet.marker(position);
   marker.addTo(map);
-
+  clear_layer.addLayer(marker);
   // Change Marker Color: https://stackoverflow.com/a/61982880
   const iconElement = marker.getElement();
   if (iconElement) {
@@ -190,7 +202,6 @@ function placeCache(cache: Cache) {
     marker.bindPopup(updateCachePopup(cache, cache_updated));
   });
 }
-
 function updateCachePopup(cache: Cache, cache_updated: Event) {
   const popupDiv = document.createElement("div");
   popupDiv.innerHTML = `<div>Cache ${cache.cell.i}:${cache.cell.j}</div>`;
@@ -199,9 +210,10 @@ function updateCachePopup(cache: Cache, cache_updated: Event) {
 
   for (let i = 0; i < cache.coins.length; i++) {
     const coin_element: HTMLLIElement = document.createElement("li");
-    coin_element.innerHTML = `Coin ID: ${
-      cache.coins[i].toString()
-    } <button id="coin${i}">collect</button>`;
+    coin_element.innerHTML =
+      `Coin ID: ${(cache.coins[i].cell.i)}:${(cache.coins[i].cell.j)}#${
+        cache.coins[i].serial
+      } <button id="coin${i}">collect</button>`;
     coin_list.appendChild(coin_element);
   }
   popupDiv.appendChild(coin_list);
@@ -215,7 +227,7 @@ function updateCachePopup(cache: Cache, cache_updated: Event) {
       dispatchEvent(player_inventory_changed);
       dispatchEvent(cache_updated);
     });
-    // Credet ChatGPT to prevent popup close
+    // Credit ChatGPT to prevent popup close
     leaflet.DomEvent.on(button, "click", function (e) {
       leaflet.DomEvent.stopPropagation(e);
     });
@@ -242,33 +254,74 @@ function updateCachePopup(cache: Cache, cache_updated: Event) {
 }
 
 function updateInventory() {
-  console.log(inventory.coins.length);
   inventory_element.innerHTML = "Inventory: ";
   const coin_list: HTMLUListElement = document.createElement("ul");
   for (let i = 0; i < inventory.coins.length; i++) {
     const coin_element: HTMLLIElement = document.createElement("li");
-    coin_element.innerHTML = `Coin ID: ${inventory.coins[i].toString()}`;
+    coin_element.innerHTML =
+      `Coin ID: ${(inventory.coins[i].cell.i)}:${(inventory.coins[i].cell.j)}#${
+        inventory.coins[i].serial
+      }`;
     coin_list.appendChild(coin_element);
   }
   inventory_element.appendChild(coin_list);
 }
+
+function createControlPanel() {
+  createMovementButton("⬆️", leaflet.latLng(TILE_DEGREES, 0));
+  createMovementButton("⬇️", leaflet.latLng(-TILE_DEGREES, 0));
+  createMovementButton("⬅️", leaflet.latLng(0, -TILE_DEGREES));
+  createMovementButton("➡️", leaflet.latLng(0, TILE_DEGREES));
+
+  function createMovementButton(icon: string, dir: leaflet.LatLng) {
+    const button: HTMLButtonElement = document.createElement("button");
+    button.innerHTML = icon;
+    button.id = "emoji-button";
+    button.addEventListener("click", () => {
+      origin = leaflet.latLng(origin.lat + dir.lat, origin.lng + dir.lng);
+      dispatchEvent(player_moved);
+    });
+    control_panel.appendChild(button);
+  }
+}
+
+function showNearbyCaches(pos: leaflet.LatLng) {
+  const cells = board.getCellsNearPoint(pos);
+
+  cells.forEach((cell) => {
+    const chance: number = luck([cell.i, cell.j].toString());
+    if (chance < CACHE_SPAWN_PROBABILITY) {
+      if (!momentos.has([cell.i, cell.j].toString())) {
+        const num_coins: number = Math.floor(chance * 30) + 1;
+        placeCache(createCache(cell.i, cell.j, num_coins));
+      } else {
+        const momento = momentos.get([cell.i, cell.j].toString())!;
+        const cache = createCache(cell.i, cell.j, 0);
+        cache.fromMomento(momento);
+        placeCache(cache);
+      }
+    }
+  });
+}
+
+let origin = OAKES_CLASSROOM;
+const map = createMap(origin);
+const clear_layer: leaflet.LayerGroup = new leaflet.LayerGroup().addTo(map);
+const board: Board = createBoard();
 
 // Listeners
 addEventListener("player-inventory-changed", () => {
   updateInventory();
 });
 
-const origin = OAKES_CLASSROOM;
-const map = createMap(origin);
-updateInventory();
-
-createMarker(origin, "That's You!", map);
-
-const board: Board = createBoard();
-const cells = board.getCellsNearPoint(OAKES_CLASSROOM);
-
-cells.forEach((cell) => {
-  if (luck([cell.i, cell.j].toString()) < CACHE_SPAWN_PROBABILITY) {
-    placeCache(createCache(cell.i, cell.j));
-  }
+addEventListener("player-moved", () => {
+  clear_layer.clearLayers();
+  map.setView(origin, GAMEPLAY_ZOOM_LEVEL);
+  createMarker(origin, "That's You!", map);
+  showNearbyCaches(origin);
 });
+
+createControlPanel();
+updateInventory();
+createMarker(origin, "That's You!", map);
+showNearbyCaches(origin);
