@@ -24,13 +24,23 @@ interface Cell {
 }
 
 interface Coin {
-  serial: string;
+  cell: Cell;
+  serial: number;
+  toString(): string;
 }
 
 interface Cache {
   cell: Cell;
   coins: Coin[];
-  latLng(origin: leaflet.LatLng): leaflet.LatLng;
+}
+
+interface Board {
+  tile_width: number;
+  tile_visible_radius: number;
+  known_cells: Map<string, Cell>;
+  getCell(i: number, j: number): Cell;
+  getCellFromPoint(point: leaflet.LatLng): Cell;
+  getCellsNearPoint(point: leaflet.LatLng): Cell[];
 }
 
 // Events
@@ -47,15 +57,54 @@ const OAKES_CLASSROOM: leaflet.LatLng = leaflet.latLng(
 const inventory: Cache = {
   cell: { i: 0, j: 0 },
   coins: [],
-  latLng(origin: leaflet.LatLng) {
-    return origin;
-  },
 };
 
 const GAMEPLAY_ZOOM_LEVEL = 19;
 const TILE_DEGREES = 1e-4;
 const NEIGHBORHOOD_SIZE = 8;
 const CACHE_SPAWN_PROBABILITY = 0.1;
+
+function createBoard() {
+  const board: Board = {
+    tile_width: TILE_DEGREES,
+    tile_visible_radius: NEIGHBORHOOD_SIZE,
+    known_cells: new Map<string, Cell>(),
+    getCell(i: number, j: number) {
+      const key = [i, j].toString();
+      if (!this.known_cells.has(key)) {
+        this.known_cells.set(key, { i: i, j: j });
+      }
+      return this.known_cells.get(key)!;
+    },
+    getCellFromPoint(point: leaflet.LatLng) {
+      const i = Math.floor(point.lat / this.tile_width);
+      const j = Math.floor(point.lng / this.tile_width);
+      return this.getCell(i, j);
+    },
+    getCellsNearPoint(point: leaflet.LatLng) {
+      const cells: Cell[] = [];
+      const origin: Cell = this.getCellFromPoint(point);
+
+      for (
+        let i = -this.tile_visible_radius;
+        i < this.tile_visible_radius;
+        i++
+      ) {
+        for (
+          let j = -this.tile_visible_radius;
+          j < this.tile_visible_radius;
+          j++
+        ) {
+          cells.push(this.getCell(i + origin.i, j + origin.j));
+        }
+      }
+
+      return cells;
+    },
+  };
+
+  return board;
+}
 
 // Transfer a coin from cache a to cache b
 function transfer(a: Cache, b: Cache, coin: Coin) {
@@ -94,10 +143,10 @@ function createMarker(loc: leaflet.LatLng, text: string, map: leaflet.Map) {
   marker.addTo(map);
 }
 
-function coordToLatLng(i: number, j: number, origin: leaflet.LatLng) {
+function coordToLatLng(i: number, j: number) {
   return leaflet.latLng(
-    origin.lat + i * TILE_DEGREES,
-    origin.lng + j * TILE_DEGREES,
+    i * TILE_DEGREES,
+    j * TILE_DEGREES,
   );
 }
 
@@ -105,20 +154,23 @@ function createCache(i: number, j: number): Cache {
   const cache: Cache = {
     cell: { i: i, j: j },
     coins: [],
-    latLng(origin: leaflet.LatLng) {
-      return coordToLatLng(i, j, origin);
-    },
   };
   const chance: number = luck([i + j].toString());
   const num_coins: number = Math.floor(chance * 3) + 1;
   for (let k = 0; k < num_coins; k++) {
-    cache.coins.push({ serial: `(${i},${j}):${k.toFixed(0)}` });
+    cache.coins.push({
+      cell: cache.cell,
+      serial: k,
+      toString() {
+        return `${(this.cell.i)}:${(this.cell.j)}#${this.serial}`;
+      },
+    });
   }
   return cache;
 }
 
-function placeCache(cache: Cache, origin: leaflet.LatLng) {
-  const position = cache.latLng(origin);
+function placeCache(cache: Cache) {
+  const position = coordToLatLng(cache.cell.i, cache.cell.j);
   const marker = leaflet.marker(position);
   marker.addTo(map);
 
@@ -141,14 +193,14 @@ function placeCache(cache: Cache, origin: leaflet.LatLng) {
 
 function updateCachePopup(cache: Cache, cache_updated: Event) {
   const popupDiv = document.createElement("div");
-  popupDiv.innerHTML = `<div>Cache (${cache.cell.i},${cache.cell.j})</div>`;
+  popupDiv.innerHTML = `<div>Cache ${cache.cell.i}:${cache.cell.j}</div>`;
 
   const coin_list: HTMLUListElement = document.createElement("ul");
 
   for (let i = 0; i < cache.coins.length; i++) {
     const coin_element: HTMLLIElement = document.createElement("li");
     coin_element.innerHTML = `Coin ID: ${
-      cache.coins[i].serial
+      cache.coins[i].toString()
     } <button id="coin${i}">collect</button>`;
     coin_list.appendChild(coin_element);
   }
@@ -171,7 +223,7 @@ function updateCachePopup(cache: Cache, cache_updated: Event) {
 
   if (inventory.coins.length > 0) {
     const button = document.createElement("button");
-    button.innerHTML = "Transfer";
+    button.innerHTML = "deposit";
 
     button.addEventListener("click", () => {
       transfer(inventory, cache, inventory.coins[inventory.coins.length - 1]);
@@ -195,7 +247,7 @@ function updateInventory() {
   const coin_list: HTMLUListElement = document.createElement("ul");
   for (let i = 0; i < inventory.coins.length; i++) {
     const coin_element: HTMLLIElement = document.createElement("li");
-    coin_element.innerHTML = `Coin ID: ${inventory.coins[i].serial}`;
+    coin_element.innerHTML = `Coin ID: ${inventory.coins[i].toString()}`;
     coin_list.appendChild(coin_element);
   }
   inventory_element.appendChild(coin_list);
@@ -212,13 +264,11 @@ updateInventory();
 
 createMarker(origin, "That's You!", map);
 
-for (let i = -NEIGHBORHOOD_SIZE; i < NEIGHBORHOOD_SIZE; i++) {
-  for (let j = -NEIGHBORHOOD_SIZE; j < NEIGHBORHOOD_SIZE; j++) {
-    // If location i,j is lucky enough, spawn a cache!
-    const chance: number = luck([i, j].toString());
-    if (chance < CACHE_SPAWN_PROBABILITY) {
-      const cache: Cache = createCache(i, j);
-      placeCache(cache, origin);
-    }
+const board: Board = createBoard();
+const cells = board.getCellsNearPoint(OAKES_CLASSROOM);
+
+cells.forEach((cell) => {
+  if (luck([cell.i, cell.j].toString()) < CACHE_SPAWN_PROBABILITY) {
+    placeCache(createCache(cell.i, cell.j));
   }
-}
+});
