@@ -68,7 +68,7 @@ button:focus-visible {
   outline: 4px auto -webkit-focus-ring-color;
 }
 
-#emoji-button {
+#emojiButton {
   background-color: transparent;
   border: none;
   font-size: 3rem;
@@ -77,8 +77,16 @@ button:focus-visible {
   width: auto;
   height: auto;
 }
-#emoji-button:focus {
+#emojiButton:focus {
   outline: none;
+}
+
+#appTitle {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+#controlPanel {
+  margin-top: 0;
 }
 
 @media (prefers-color-scheme: light) {

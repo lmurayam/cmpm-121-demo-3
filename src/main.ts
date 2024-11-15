@@ -57,6 +57,9 @@ const OAKES_CLASSROOM: leaflet.LatLng = leaflet.latLng(
   -122.06277128548504,
 );
 const inventory: Cache = createCache(0, 0, 0);
+inventory.toString = () => {
+  return "inventory";
+};
 const momentos: Map<string, string> = new Map<string, string>();
 
 const GAMEPLAY_ZOOM_LEVEL = 19;
@@ -174,9 +177,6 @@ function createCache(i: number, j: number, num_coins: number): Cache {
       serial: k,
     });
   }
-  if (num_coins > 0) {
-    momentos.set(cache.toString(), cache.toMomento());
-  }
 
   return cache;
 }
@@ -268,15 +268,28 @@ function updateInventory() {
 }
 
 function createControlPanel() {
+  const pos_button: HTMLButtonElement = document.createElement("button");
+  pos_button.innerHTML = "🌐";
+  pos_button.id = "emojiButton";
+  control_panel.appendChild(pos_button);
+
   createMovementButton("⬆️", leaflet.latLng(TILE_DEGREES, 0));
   createMovementButton("⬇️", leaflet.latLng(-TILE_DEGREES, 0));
   createMovementButton("⬅️", leaflet.latLng(0, -TILE_DEGREES));
   createMovementButton("➡️", leaflet.latLng(0, TILE_DEGREES));
 
+  const trash_button: HTMLButtonElement = document.createElement("button");
+  trash_button.innerHTML = "🚮";
+  trash_button.id = "emojiButton";
+  trash_button.addEventListener("click", () => {
+    clearData();
+  });
+  control_panel.appendChild(trash_button);
+
   function createMovementButton(icon: string, dir: leaflet.LatLng) {
     const button: HTMLButtonElement = document.createElement("button");
     button.innerHTML = icon;
-    button.id = "emoji-button";
+    button.id = "emojiButton";
     button.addEventListener("click", () => {
       origin = leaflet.latLng(origin.lat + dir.lat, origin.lng + dir.lng);
       dispatchEvent(player_moved);
@@ -304,6 +317,31 @@ function showNearbyCaches(pos: leaflet.LatLng) {
   });
 }
 
+function saveData() {
+  localStorage.setItem("data", JSON.stringify(Array.from(momentos.entries())));
+}
+function loadData() {
+  const data_string = localStorage.getItem("data");
+  if (!data_string) {
+    return;
+  }
+  const data_array = JSON.parse(data_string);
+  data_array.forEach((key: string, value: string) => {
+    momentos.set(key, value);
+  });
+}
+function clearData() {
+  const confirmation = prompt("If you want to clear data, type: DELETE", "");
+  if (confirmation === "DELETE") {
+    localStorage.clear();
+    location.reload();
+  }
+}
+
+globalThis.addEventListener("beforeunload", () => {
+  saveData();
+});
+
 let origin = OAKES_CLASSROOM;
 const map = createMap(origin);
 const clear_layer: leaflet.LayerGroup = new leaflet.LayerGroup().addTo(map);
@@ -320,6 +358,8 @@ addEventListener("player-moved", () => {
   createMarker(origin, "That's You!", map);
   showNearbyCaches(origin);
 });
+
+loadData();
 
 createControlPanel();
 updateInventory();
