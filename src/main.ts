@@ -62,10 +62,15 @@ inventory.toString = () => {
 };
 const momentos: Map<string, string> = new Map<string, string>();
 
+const locHistory: leaflet.LatLng[][] = [];
+
 const GAMEPLAY_ZOOM_LEVEL = 19;
 const TILE_DEGREES = 1e-4;
 const NEIGHBORHOOD_SIZE = 8;
 const CACHE_SPAWN_PROBABILITY = 0.1;
+
+const GEOLOCATION_DISTANCE = 8;
+const HISTORY_UPDATE_DISTANCE = 20;
 
 function createBoard() {
   const board: Board = {
@@ -267,10 +272,16 @@ function updateInventory() {
   inventory_element.appendChild(coin_list);
 }
 
+let geoloc: boolean = false;
+
 function createControlPanel() {
   const pos_button: HTMLButtonElement = document.createElement("button");
   pos_button.innerHTML = "🌐";
   pos_button.id = "emojiButton";
+  pos_button.addEventListener("click", () => {
+    geoloc = !geoloc;
+  });
+
   control_panel.appendChild(pos_button);
 
   createMovementButton("⬆️", leaflet.latLng(TILE_DEGREES, 0));
@@ -291,10 +302,52 @@ function createControlPanel() {
     button.innerHTML = icon;
     button.id = "emojiButton";
     button.addEventListener("click", () => {
+      if (geoloc) {
+        alert("Turn off geolocation");
+        return;
+      }
       origin = leaflet.latLng(origin.lat + dir.lat, origin.lng + dir.lng);
       dispatchEvent(player_moved);
     });
     control_panel.appendChild(button);
+  }
+}
+
+function updateGeolocation() {
+  if (geoloc == false) return;
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition((position) => {
+      const realPos = leaflet.latLng(
+        position.coords.latitude,
+        position.coords.longitude,
+      );
+      const distance = realPos.distanceTo(origin);
+      console.log(distance);
+      if (distance > GEOLOCATION_DISTANCE) {
+        origin = realPos;
+        dispatchEvent(player_moved);
+      }
+    });
+  } else {
+    geoloc = false;
+    alert("Geolocation not supported");
+  }
+}
+
+function updateLocationHistory() {
+  //if there is no history, add the current location
+  if (locHistory.length == 0) {
+    locHistory.push([origin]);
+  } else {
+    const lastPos = locHistory[locHistory.length - 1];
+    //if the distance from the last recorded position is within HISTORY_UPDATE_DISTANCE, add it to the current line, else make a new line
+    if (
+      origin.distanceTo(lastPos[lastPos.length - 1]) < HISTORY_UPDATE_DISTANCE
+    ) {
+      lastPos.push(origin);
+    } else {
+      locHistory.push([origin]);
+    }
   }
 }
 
@@ -317,32 +370,62 @@ function showNearbyCaches(pos: leaflet.LatLng) {
   });
 }
 
+function refreshMap() {
+  clear_layer.clearLayers();
+  map.setView(origin, GAMEPLAY_ZOOM_LEVEL);
+  createMarker(origin, "That's You!", map);
+  showNearbyCaches(origin);
+  updateLocationHistory();
+  const polyline = leaflet.polyline(locHistory, { color: "blue" });
+  polyline.addTo(map);
+  clear_layer.addLayer(polyline);
+}
+
 function saveData() {
   localStorage.setItem("data", JSON.stringify(Array.from(momentos.entries())));
+  localStorage.setItem("loc", JSON.stringify([origin.lat, origin.lng]));
+  localStorage.setItem("hist", JSON.stringify(locHistory));
 }
 function loadData() {
   const data_string = localStorage.getItem("data");
   if (!data_string) {
     return;
   }
-  const data_array = JSON.parse(data_string);
-  data_array.forEach((key: string, value: string) => {
+  const data_array: [string, string][] = JSON.parse(data_string);
+  data_array.forEach(([key, value]) => {
     momentos.set(key, value);
   });
+  const inv = momentos.get("inventory");
+  if (inv) {
+    inventory.fromMomento(inv);
+  }
+  const loc_string = localStorage.getItem("loc");
+  if (loc_string) {
+    const loc = JSON.parse(loc_string);
+    origin = leaflet.latLng(loc[0], loc[1]);
+  }
+  const hist_string = localStorage.getItem("hist");
+  if (hist_string) {
+    const temp = JSON.parse(hist_string);
+    temp.forEach((element: []) => {
+      locHistory.push(element);
+    });
+  }
 }
 function clearData() {
   const confirmation = prompt("If you want to clear data, type: DELETE", "");
   if (confirmation === "DELETE") {
     localStorage.clear();
+    console.log(localStorage.getItem("data"));
+    globalThis.removeEventListener("beforeunload", saveData);
     location.reload();
   }
 }
 
-globalThis.addEventListener("beforeunload", () => {
-  saveData();
-});
+globalThis.addEventListener("beforeunload", saveData);
 
 let origin = OAKES_CLASSROOM;
+loadData();
 const map = createMap(origin);
 const clear_layer: leaflet.LayerGroup = new leaflet.LayerGroup().addTo(map);
 const board: Board = createBoard();
@@ -352,16 +435,10 @@ addEventListener("player-inventory-changed", () => {
   updateInventory();
 });
 
-addEventListener("player-moved", () => {
-  clear_layer.clearLayers();
-  map.setView(origin, GAMEPLAY_ZOOM_LEVEL);
-  createMarker(origin, "That's You!", map);
-  showNearbyCaches(origin);
-});
-
-loadData();
+addEventListener("player-moved", refreshMap);
 
 createControlPanel();
 updateInventory();
-createMarker(origin, "That's You!", map);
-showNearbyCaches(origin);
+refreshMap();
+
+setInterval(updateGeolocation, 1000);
