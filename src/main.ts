@@ -69,7 +69,6 @@ const TILE_DEGREES = 1e-4;
 const NEIGHBORHOOD_SIZE = 8;
 const CACHE_SPAWN_PROBABILITY = 0.1;
 
-const GEOLOCATION_DISTANCE = 8;
 const HISTORY_UPDATE_DISTANCE = 20;
 
 function createBoard() {
@@ -279,7 +278,7 @@ function createControlPanel() {
   pos_button.innerHTML = "🌐";
   pos_button.id = "emojiButton";
   pos_button.addEventListener("click", () => {
-    geoloc = !geoloc;
+    toggleGeolocation();
   });
 
   control_panel.appendChild(pos_button);
@@ -313,24 +312,32 @@ function createControlPanel() {
   }
 }
 
-function updateGeolocation() {
-  if (geoloc == false) return;
-  if (navigator.geolocation) {
-    navigator.geolocation.getCurrentPosition((position) => {
-      const realPos = leaflet.latLng(
-        position.coords.latitude,
-        position.coords.longitude,
-      );
-      const distance = realPos.distanceTo(origin);
-      console.log(distance);
-      if (distance > GEOLOCATION_DISTANCE) {
+let watchID: number;
+function toggleGeolocation() {
+  geoloc = !geoloc;
+  if (geoloc) {
+    if (navigator.geolocation) {
+      watchID = navigator.geolocation.watchPosition((position) => {
+        const realPos = leaflet.latLng(
+          position.coords.latitude,
+          position.coords.longitude,
+        );
         origin = realPos;
         dispatchEvent(player_moved);
-      }
-    });
+      }, () => {
+        alert("Geolocation failed");
+        geoloc = false;
+      }, {
+        enableHighAccuracy: true,
+        maximumAge: 0,
+        timeout: 5000,
+      });
+    } else {
+      alert("Geolocation not supported");
+      geoloc = false;
+    }
   } else {
-    geoloc = false;
-    alert("Geolocation not supported");
+    navigator.geolocation.clearWatch(watchID);
   }
 }
 
@@ -440,5 +447,3 @@ addEventListener("player-moved", refreshMap);
 createControlPanel();
 updateInventory();
 refreshMap();
-
-setInterval(updateGeolocation, 1000);
