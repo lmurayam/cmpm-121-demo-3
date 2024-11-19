@@ -257,6 +257,7 @@ const TILE_DEGREES = 1e-4;
 const NEIGHBORHOOD_SIZE = 8;
 const CACHE_SPAWN_PROBABILITY = 0.1;
 
+const MINIMUM_UPDATE_DISTANCE = 5;
 const HISTORY_UPDATE_DISTANCE = 20;
 
 const mapService = new LeafletMapService(
@@ -369,8 +370,13 @@ function toggleGeolocation() {
           position.coords.latitude,
           position.coords.longitude,
         );
-        origin = realPos;
-        dispatchEvent(player_moved);
+        if (
+          mapService.calculateDistance(origin, realPos) >
+            MINIMUM_UPDATE_DISTANCE
+        ) {
+          origin = realPos;
+          dispatchEvent(player_moved);
+        }
       }, () => {
         alert("Geolocation failed");
         geoloc = false;
