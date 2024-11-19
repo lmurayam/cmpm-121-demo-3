@@ -23,6 +23,11 @@ interface Cell {
   j: number;
 }
 
+interface latlng {
+  lat: number;
+  lng: number;
+}
+
 interface Coin {
   cell: Cell;
   serial: number;
@@ -41,8 +46,190 @@ interface Board {
   tile_visible_radius: number;
   known_cells: Map<string, Cell>;
   getCell(i: number, j: number): Cell;
-  getCellFromPoint(point: leaflet.LatLng): Cell;
-  getCellsNearPoint(point: leaflet.LatLng): Cell[];
+  getCellFromPoint(point: latlng): Cell;
+  getCellsNearPoint(point: latlng): Cell[];
+}
+
+interface MapService {
+  initialize(parentElement: HTMLElement, center: latlng, zoom: number): void;
+  setView(coord: latlng, zoom: number): void;
+  addMarker(coord: latlng, text: string): void;
+  addCache(cache: Cache): void;
+  refresh(callback: () => void): void;
+  addControlPanelFunc(): void;
+  calculateDistance(a: latlng, b: latlng): number;
+  drawPath(path: latlng[][]): void;
+}
+
+class LeafletMapService implements MapService {
+  private map: leaflet.Map;
+  private clearLayer: leaflet.LayerGroup;
+  constructor(parentElement: HTMLElement, center: latlng, zoom: number) {
+    this.map = this.initialize(parentElement, center, zoom);
+    this.clearLayer = new leaflet.LayerGroup().addTo(this.map);
+  }
+  initialize(parentElement: HTMLElement, center: latlng, zoom: number) {
+    this.map = leaflet.map(parentElement, {
+      center: leaflet.latLng(center),
+      zoom: zoom,
+      minZoom: GAMEPLAY_ZOOM_LEVEL,
+      maxZoom: GAMEPLAY_ZOOM_LEVEL,
+      zoomControl: false,
+      scrollWheelZoom: false,
+    });
+
+    leaflet
+      .tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution:
+          '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      })
+      .addTo(this.map);
+
+    return this.map;
+  }
+  setView(coord: latlng, zoom: number): void {
+    this.map.setView(leaflet.latLng(coord), zoom);
+  }
+  addMarker(coord: { lat: number; lng: number }, text: string): void {
+    const marker = leaflet.marker(leaflet.latLng(coord));
+    marker.bindTooltip(text);
+    marker.addTo(this.map);
+    this.clearLayer.addLayer(marker);
+  }
+  addCache(cache: Cache): void {
+    const marker = leaflet.marker({
+      lat: cache.cell.i * TILE_DEGREES,
+      lng: cache.cell.j * TILE_DEGREES,
+    });
+    marker.addTo(this.map);
+    this.clearLayer.addLayer(marker);
+
+    const iconElement = marker.getElement();
+    if (iconElement) {
+      iconElement.style.filter = "hue-rotate(120deg)";
+    }
+    const cache_updated: Event = new CustomEvent(
+      `cache-updated-${cache.cell.i}-${cache.cell.j}`,
+    );
+
+    addEventListener(`cache-updated-${cache.cell.i}-${cache.cell.j}`, () => {
+      marker.setPopupContent(updateCachePopup());
+    });
+    marker.addEventListener("click", () => {
+      marker.bindPopup(updateCachePopup());
+    });
+
+    function updateCachePopup() {
+      const popup = document.createElement("div");
+      popup.innerHTML = `<div>Cache ${cache.cell.i}:${cache.cell.j}</div>`;
+
+      const coinList: HTMLUListElement = document.createElement("ul");
+
+      for (let i = 0; i < cache.coins.length; i++) {
+        const coinElement: HTMLLIElement = document.createElement("li");
+        coinElement.innerHTML =
+          `Coin ID: ${(cache.coins[i].cell.i)}:${(cache.coins[i].cell.j)}#${
+            cache.coins[i].serial
+          } <button id="coin${i}">collect</button>`;
+        coinList.appendChild(coinElement);
+      }
+      popup.appendChild(coinList);
+
+      for (let i = 0; i < cache.coins.length; i++) {
+        const button: HTMLButtonElement = popup.querySelector<
+          HTMLButtonElement
+        >(
+          `#coin${i}`,
+        )!;
+        button.addEventListener("click", () => {
+          transfer(cache, inventory, cache.coins[i]);
+          dispatchEvent(player_inventory_changed);
+          dispatchEvent(cache_updated);
+        });
+        // Credit ChatGPT to prevent popup close
+        leaflet.DomEvent.on(button, "click", function (e) {
+          leaflet.DomEvent.stopPropagation(e);
+        });
+      }
+
+      if (inventory.coins.length > 0) {
+        const button = document.createElement("button");
+        button.innerHTML = "deposit";
+
+        button.addEventListener("click", () => {
+          transfer(
+            inventory,
+            cache,
+            inventory.coins[inventory.coins.length - 1],
+          );
+          dispatchEvent(player_inventory_changed);
+          dispatchEvent(cache_updated);
+        });
+
+        leaflet.DomEvent.on(button, "click", function (e) {
+          leaflet.DomEvent.stopPropagation(e);
+        });
+
+        popup.append(button);
+      }
+
+      return popup;
+    }
+  }
+  refresh(callback: () => void): void {
+    this.clearLayer.clearLayers();
+    this.map.setView(origin, GAMEPLAY_ZOOM_LEVEL);
+    callback();
+  }
+  addControlPanelFunc(): void {
+    const pos_button: HTMLButtonElement = document.createElement("button");
+    pos_button.innerHTML = "🌐";
+    pos_button.id = "emojiButton";
+    pos_button.addEventListener("click", () => {
+      toggleGeolocation();
+    });
+
+    control_panel.appendChild(pos_button);
+
+    createMovementButton("⬆️", leaflet.latLng(TILE_DEGREES, 0));
+    createMovementButton("⬇️", leaflet.latLng(-TILE_DEGREES, 0));
+    createMovementButton("⬅️", leaflet.latLng(0, -TILE_DEGREES));
+    createMovementButton("➡️", leaflet.latLng(0, TILE_DEGREES));
+
+    const trash_button: HTMLButtonElement = document.createElement("button");
+    trash_button.innerHTML = "🚮";
+    trash_button.id = "emojiButton";
+    trash_button.addEventListener("click", () => {
+      clearData();
+    });
+    control_panel.appendChild(trash_button);
+
+    function createMovementButton(icon: string, dir: leaflet.LatLng) {
+      const button: HTMLButtonElement = document.createElement("button");
+      button.innerHTML = icon;
+      button.id = "emojiButton";
+      button.addEventListener("click", () => {
+        if (geoloc) {
+          alert("Turn off geolocation");
+          return;
+        }
+        origin = leaflet.latLng(origin.lat + dir.lat, origin.lng + dir.lng);
+        dispatchEvent(player_moved);
+      });
+      control_panel.appendChild(button);
+    }
+  }
+  calculateDistance(a: latlng, b: latlng): number {
+    const la = leaflet.latLng(a);
+    const lb = leaflet.latLng(b);
+    return la.distanceTo(lb);
+  }
+  drawPath(path: latlng[][]): void {
+    const polyline = leaflet.polyline(path, { color: "blue" });
+    polyline.addTo(this.map);
+    this.map.addLayer(polyline);
+  }
 }
 
 // Events
@@ -56,13 +243,14 @@ const OAKES_CLASSROOM: leaflet.LatLng = leaflet.latLng(
   36.98949379578401,
   -122.06277128548504,
 );
+
 const inventory: Cache = createCache(0, 0, 0);
 inventory.toString = () => {
   return "inventory";
 };
 const momentos: Map<string, string> = new Map<string, string>();
 
-const locHistory: leaflet.LatLng[][] = [];
+const locHistory: latlng[][] = [];
 
 const GAMEPLAY_ZOOM_LEVEL = 19;
 const TILE_DEGREES = 1e-4;
@@ -70,6 +258,12 @@ const NEIGHBORHOOD_SIZE = 8;
 const CACHE_SPAWN_PROBABILITY = 0.1;
 
 const HISTORY_UPDATE_DISTANCE = 20;
+
+const mapService = new LeafletMapService(
+  map_element,
+  OAKES_CLASSROOM,
+  GAMEPLAY_ZOOM_LEVEL,
+);
 
 function createBoard() {
   const board: Board = {
@@ -83,12 +277,12 @@ function createBoard() {
       }
       return this.known_cells.get(key)!;
     },
-    getCellFromPoint(point: leaflet.LatLng) {
+    getCellFromPoint(point: latlng) {
       const i = Math.floor(point.lat / this.tile_width);
       const j = Math.floor(point.lng / this.tile_width);
       return this.getCell(i, j);
     },
-    getCellsNearPoint(point: leaflet.LatLng) {
+    getCellsNearPoint(point: latlng) {
       const cells: Cell[] = [];
       const origin: Cell = this.getCellFromPoint(point);
 
@@ -125,42 +319,6 @@ function transfer(a: Cache, b: Cache, coin: Coin) {
   momentos.set(b.toString(), b.toMomento());
 }
 
-// Credits: https://github.com/rndmcnlly/cmpm-121-demo-3/blob/main/src/example.ts
-function createMap(loc: leaflet.LatLng) {
-  const map = leaflet.map(map_element, {
-    center: loc,
-    zoom: GAMEPLAY_ZOOM_LEVEL,
-    minZoom: GAMEPLAY_ZOOM_LEVEL,
-    maxZoom: GAMEPLAY_ZOOM_LEVEL,
-    zoomControl: false,
-    scrollWheelZoom: false,
-  });
-
-  leaflet
-    .tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 19,
-      attribution:
-        '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-    })
-    .addTo(map);
-  return map;
-}
-
-function createMarker(loc: leaflet.LatLng, text: string, map: leaflet.Map) {
-  const marker = leaflet.marker(loc);
-  marker.bindTooltip(text);
-  marker.addTo(map);
-  clear_layer.addLayer(marker);
-  return marker;
-}
-
-function coordToLatLng(i: number, j: number) {
-  return leaflet.latLng(
-    i * TILE_DEGREES,
-    j * TILE_DEGREES,
-  );
-}
-
 function createCache(i: number, j: number, num_coins: number): Cache {
   const cache: Cache = {
     cell: { i: i, j: j },
@@ -185,78 +343,6 @@ function createCache(i: number, j: number, num_coins: number): Cache {
   return cache;
 }
 
-function placeCache(cache: Cache) {
-  const position = coordToLatLng(cache.cell.i, cache.cell.j);
-  const marker = leaflet.marker(position);
-  marker.addTo(map);
-  clear_layer.addLayer(marker);
-  // Change Marker Color: https://stackoverflow.com/a/61982880
-  const iconElement = marker.getElement();
-  if (iconElement) {
-    iconElement.style.filter = "hue-rotate(120deg)";
-  }
-
-  const cache_updated: Event = new CustomEvent(
-    `cache-updated-${cache.cell.i}-${cache.cell.j}`,
-  );
-  addEventListener(`cache-updated-${cache.cell.i}-${cache.cell.j}`, () => {
-    marker.setPopupContent(updateCachePopup(cache, cache_updated));
-  });
-  marker.addEventListener("click", () => {
-    marker.bindPopup(updateCachePopup(cache, cache_updated));
-  });
-}
-function updateCachePopup(cache: Cache, cache_updated: Event) {
-  const popupDiv = document.createElement("div");
-  popupDiv.innerHTML = `<div>Cache ${cache.cell.i}:${cache.cell.j}</div>`;
-
-  const coin_list: HTMLUListElement = document.createElement("ul");
-
-  for (let i = 0; i < cache.coins.length; i++) {
-    const coin_element: HTMLLIElement = document.createElement("li");
-    coin_element.innerHTML =
-      `Coin ID: ${(cache.coins[i].cell.i)}:${(cache.coins[i].cell.j)}#${
-        cache.coins[i].serial
-      } <button id="coin${i}">collect</button>`;
-    coin_list.appendChild(coin_element);
-  }
-  popupDiv.appendChild(coin_list);
-
-  for (let i = 0; i < cache.coins.length; i++) {
-    const button: HTMLButtonElement = popupDiv.querySelector<HTMLButtonElement>(
-      `#coin${i}`,
-    )!;
-    button.addEventListener("click", () => {
-      transfer(cache, inventory, cache.coins[i]);
-      dispatchEvent(player_inventory_changed);
-      dispatchEvent(cache_updated);
-    });
-    // Credit ChatGPT to prevent popup close
-    leaflet.DomEvent.on(button, "click", function (e) {
-      leaflet.DomEvent.stopPropagation(e);
-    });
-  }
-
-  if (inventory.coins.length > 0) {
-    const button = document.createElement("button");
-    button.innerHTML = "deposit";
-
-    button.addEventListener("click", () => {
-      transfer(inventory, cache, inventory.coins[inventory.coins.length - 1]);
-      dispatchEvent(player_inventory_changed);
-      dispatchEvent(cache_updated);
-    });
-
-    leaflet.DomEvent.on(button, "click", function (e) {
-      leaflet.DomEvent.stopPropagation(e);
-    });
-
-    popupDiv.append(button);
-  }
-
-  return popupDiv;
-}
-
 function updateInventory() {
   inventory_element.innerHTML = "Inventory: ";
   const coin_list: HTMLUListElement = document.createElement("ul");
@@ -272,45 +358,6 @@ function updateInventory() {
 }
 
 let geoloc: boolean = false;
-
-function createControlPanel() {
-  const pos_button: HTMLButtonElement = document.createElement("button");
-  pos_button.innerHTML = "🌐";
-  pos_button.id = "emojiButton";
-  pos_button.addEventListener("click", () => {
-    toggleGeolocation();
-  });
-
-  control_panel.appendChild(pos_button);
-
-  createMovementButton("⬆️", leaflet.latLng(TILE_DEGREES, 0));
-  createMovementButton("⬇️", leaflet.latLng(-TILE_DEGREES, 0));
-  createMovementButton("⬅️", leaflet.latLng(0, -TILE_DEGREES));
-  createMovementButton("➡️", leaflet.latLng(0, TILE_DEGREES));
-
-  const trash_button: HTMLButtonElement = document.createElement("button");
-  trash_button.innerHTML = "🚮";
-  trash_button.id = "emojiButton";
-  trash_button.addEventListener("click", () => {
-    clearData();
-  });
-  control_panel.appendChild(trash_button);
-
-  function createMovementButton(icon: string, dir: leaflet.LatLng) {
-    const button: HTMLButtonElement = document.createElement("button");
-    button.innerHTML = icon;
-    button.id = "emojiButton";
-    button.addEventListener("click", () => {
-      if (geoloc) {
-        alert("Turn off geolocation");
-        return;
-      }
-      origin = leaflet.latLng(origin.lat + dir.lat, origin.lng + dir.lng);
-      dispatchEvent(player_moved);
-    });
-    control_panel.appendChild(button);
-  }
-}
 
 let watchID: number;
 function toggleGeolocation() {
@@ -349,7 +396,8 @@ function updateLocationHistory() {
     const lastPos = locHistory[locHistory.length - 1];
     //if the distance from the last recorded position is within HISTORY_UPDATE_DISTANCE, add it to the current line, else make a new line
     if (
-      origin.distanceTo(lastPos[lastPos.length - 1]) < HISTORY_UPDATE_DISTANCE
+      mapService.calculateDistance(origin, lastPos[lastPos.length - 1]) <
+        HISTORY_UPDATE_DISTANCE
     ) {
       lastPos.push(origin);
     } else {
@@ -358,34 +406,33 @@ function updateLocationHistory() {
   }
 }
 
-function showNearbyCaches(pos: leaflet.LatLng) {
-  const cells = board.getCellsNearPoint(pos);
+function showNearbyCaches(coord: latlng) {
+  const cells = board.getCellsNearPoint(coord);
 
   cells.forEach((cell) => {
     const chance: number = luck([cell.i, cell.j].toString());
     if (chance < CACHE_SPAWN_PROBABILITY) {
       if (!momentos.has([cell.i, cell.j].toString())) {
         const num_coins: number = Math.floor(chance * 30) + 1;
-        placeCache(createCache(cell.i, cell.j, num_coins));
+        mapService.addCache(createCache(cell.i, cell.j, num_coins));
       } else {
         const momento = momentos.get([cell.i, cell.j].toString())!;
         const cache = createCache(cell.i, cell.j, 0);
         cache.fromMomento(momento);
-        placeCache(cache);
+        mapService.addCache(cache);
       }
     }
   });
 }
 
 function refreshMap() {
-  clear_layer.clearLayers();
-  map.setView(origin, GAMEPLAY_ZOOM_LEVEL);
-  createMarker(origin, "That's You!", map);
-  showNearbyCaches(origin);
-  updateLocationHistory();
-  const polyline = leaflet.polyline(locHistory, { color: "blue" });
-  polyline.addTo(map);
-  clear_layer.addLayer(polyline);
+  mapService.refresh(() => {
+    showNearbyCaches(origin);
+    updateLocationHistory();
+    mapService.addMarker(origin, "That's You!");
+    mapService.drawPath(locHistory);
+  });
+  console.log("refresh");
 }
 
 function saveData() {
@@ -430,12 +477,10 @@ function clearData() {
 }
 
 globalThis.addEventListener("beforeunload", saveData);
-
-let origin = OAKES_CLASSROOM;
+let origin: latlng = OAKES_CLASSROOM;
 loadData();
-const map = createMap(origin);
-const clear_layer: leaflet.LayerGroup = new leaflet.LayerGroup().addTo(map);
 const board: Board = createBoard();
+mapService.addControlPanelFunc();
 
 // Listeners
 addEventListener("player-inventory-changed", () => {
@@ -443,7 +488,5 @@ addEventListener("player-inventory-changed", () => {
 });
 
 addEventListener("player-moved", refreshMap);
-
-createControlPanel();
 updateInventory();
 refreshMap();
