@@ -56,7 +56,7 @@ interface MapService {
   addMarker(coord: latlng, text: string): void;
   addCache(cache: Cache): void;
   refresh(callback: () => void): void;
-  addControlPanelFunc(): void;
+  moveOrigin(direction: { lat: number; lng: number }): void;
   calculateDistance(a: latlng, b: latlng): number;
   drawPath(path: latlng[][]): void;
 }
@@ -105,121 +105,85 @@ class LeafletMapService implements MapService {
     marker.addTo(this.map);
     this.clearLayer.addLayer(marker);
 
+    this.attachCacheEventListeners(marker, cache);
+
     const iconElement = marker.getElement();
     if (iconElement) {
       iconElement.style.filter = "hue-rotate(120deg)";
     }
+  }
+
+  private createCachePopup(cache: Cache, inventory: Cache) {
     const cache_updated: Event = new CustomEvent(
       `cache-updated-${cache.cell.i}-${cache.cell.j}`,
     );
 
+    const popup = document.createElement("div");
+    popup.innerHTML = `<div>Cache ${cache.cell.i}:${cache.cell.j}</div>`;
+    const coinList: HTMLUListElement = document.createElement("ul");
+    cache.coins.forEach((coin, i) => {
+      const coinElement = document.createElement("li");
+      coinElement.innerHTML =
+        `Coin ID: ${coin.cell.i}:${coin.cell.j}#${coin.serial} `;
+      coinList.appendChild(coinElement);
+
+      const button: HTMLButtonElement = document.createElement("button");
+      button.innerHTML = "collect";
+      coinElement.appendChild(button);
+
+      button.addEventListener("click", () => {
+        transfer(cache, inventory, cache.coins[i]);
+        dispatchEvent(player_inventory_changed);
+        dispatchEvent(cache_updated);
+      });
+      leaflet.DomEvent.on(button, "click", function (e) {
+        leaflet.DomEvent.stopPropagation(e);
+      });
+    });
+    popup.appendChild(coinList);
+
+    if (inventory.coins.length > 0) {
+      const button = document.createElement("button");
+      button.innerHTML = "deposit";
+
+      button.addEventListener("click", () => {
+        transfer(
+          inventory,
+          cache,
+          inventory.coins[inventory.coins.length - 1],
+        );
+        dispatchEvent(player_inventory_changed);
+        dispatchEvent(cache_updated);
+      });
+
+      leaflet.DomEvent.on(button, "click", function (e) {
+        leaflet.DomEvent.stopPropagation(e);
+      });
+
+      popup.append(button);
+    }
+
+    return popup;
+  }
+
+  private attachCacheEventListeners(marker: leaflet.Marker, cache: Cache) {
     addEventListener(`cache-updated-${cache.cell.i}-${cache.cell.j}`, () => {
-      marker.setPopupContent(updateCachePopup());
+      marker.setPopupContent(this.createCachePopup(cache, inventory));
     });
     marker.addEventListener("click", () => {
-      marker.bindPopup(updateCachePopup());
+      marker.bindPopup(this.createCachePopup(cache, inventory));
     });
-
-    function updateCachePopup() {
-      const popup = document.createElement("div");
-      popup.innerHTML = `<div>Cache ${cache.cell.i}:${cache.cell.j}</div>`;
-
-      const coinList: HTMLUListElement = document.createElement("ul");
-
-      for (let i = 0; i < cache.coins.length; i++) {
-        const coinElement: HTMLLIElement = document.createElement("li");
-        coinElement.innerHTML =
-          `Coin ID: ${(cache.coins[i].cell.i)}:${(cache.coins[i].cell.j)}#${
-            cache.coins[i].serial
-          } <button id="coin${i}">collect</button>`;
-        coinList.appendChild(coinElement);
-      }
-      popup.appendChild(coinList);
-
-      for (let i = 0; i < cache.coins.length; i++) {
-        const button: HTMLButtonElement = popup.querySelector<
-          HTMLButtonElement
-        >(
-          `#coin${i}`,
-        )!;
-        button.addEventListener("click", () => {
-          transfer(cache, inventory, cache.coins[i]);
-          dispatchEvent(player_inventory_changed);
-          dispatchEvent(cache_updated);
-        });
-        // Credit ChatGPT to prevent popup close
-        leaflet.DomEvent.on(button, "click", function (e) {
-          leaflet.DomEvent.stopPropagation(e);
-        });
-      }
-
-      if (inventory.coins.length > 0) {
-        const button = document.createElement("button");
-        button.innerHTML = "deposit";
-
-        button.addEventListener("click", () => {
-          transfer(
-            inventory,
-            cache,
-            inventory.coins[inventory.coins.length - 1],
-          );
-          dispatchEvent(player_inventory_changed);
-          dispatchEvent(cache_updated);
-        });
-
-        leaflet.DomEvent.on(button, "click", function (e) {
-          leaflet.DomEvent.stopPropagation(e);
-        });
-
-        popup.append(button);
-      }
-
-      return popup;
-    }
   }
   refresh(callback: () => void): void {
     this.clearLayer.clearLayers();
     this.map.setView(origin, GAMEPLAY_ZOOM_LEVEL);
     callback();
   }
-  addControlPanelFunc(): void {
-    const pos_button: HTMLButtonElement = document.createElement("button");
-    pos_button.innerHTML = "🌐";
-    pos_button.id = "emojiButton";
-    pos_button.addEventListener("click", () => {
-      toggleGeolocation();
-    });
 
-    control_panel.appendChild(pos_button);
-
-    createMovementButton("⬆️", leaflet.latLng(TILE_DEGREES, 0));
-    createMovementButton("⬇️", leaflet.latLng(-TILE_DEGREES, 0));
-    createMovementButton("⬅️", leaflet.latLng(0, -TILE_DEGREES));
-    createMovementButton("➡️", leaflet.latLng(0, TILE_DEGREES));
-
-    const trash_button: HTMLButtonElement = document.createElement("button");
-    trash_button.innerHTML = "🚮";
-    trash_button.id = "emojiButton";
-    trash_button.addEventListener("click", () => {
-      clearData();
-    });
-    control_panel.appendChild(trash_button);
-
-    function createMovementButton(icon: string, dir: leaflet.LatLng) {
-      const button: HTMLButtonElement = document.createElement("button");
-      button.innerHTML = icon;
-      button.id = "emojiButton";
-      button.addEventListener("click", () => {
-        if (geoloc) {
-          alert("Turn off geolocation");
-          return;
-        }
-        origin = leaflet.latLng(origin.lat + dir.lat, origin.lng + dir.lng);
-        dispatchEvent(player_moved);
-      });
-      control_panel.appendChild(button);
-    }
+  moveOrigin(dir: { lat: number; lng: number }): void {
+    origin = leaflet.latLng(origin.lat + dir.lat, origin.lng + dir.lng);
   }
+
   calculateDistance(a: latlng, b: latlng): number {
     const la = leaflet.latLng(a);
     const lb = leaflet.latLng(b);
@@ -366,10 +330,10 @@ function toggleGeolocation() {
   if (geoloc) {
     if (navigator.geolocation) {
       watchID = navigator.geolocation.watchPosition((position) => {
-        const realPos = leaflet.latLng(
-          position.coords.latitude,
-          position.coords.longitude,
-        );
+        const realPos = {
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+        };
         if (
           mapService.calculateDistance(origin, realPos) >
             MINIMUM_UPDATE_DISTANCE
@@ -482,11 +446,50 @@ function clearData() {
   }
 }
 
+function addControlPanelFunc(): void {
+  const pos_button: HTMLButtonElement = document.createElement("button");
+  pos_button.innerHTML = "🌐";
+  pos_button.id = "emojiButton";
+  pos_button.addEventListener("click", () => {
+    toggleGeolocation();
+  });
+
+  control_panel.appendChild(pos_button);
+
+  createMovementButton("⬆️", { lat: TILE_DEGREES, lng: 0 });
+  createMovementButton("⬇️", { lat: -TILE_DEGREES, lng: 0 });
+  createMovementButton("⬅️", { lat: 0, lng: -TILE_DEGREES });
+  createMovementButton("➡️", { lat: 0, lng: TILE_DEGREES });
+
+  const trash_button: HTMLButtonElement = document.createElement("button");
+  trash_button.innerHTML = "🚮";
+  trash_button.id = "emojiButton";
+  trash_button.addEventListener("click", () => {
+    clearData();
+  });
+  control_panel.appendChild(trash_button);
+
+  function createMovementButton(icon: string, dir: latlng) {
+    const button: HTMLButtonElement = document.createElement("button");
+    button.innerHTML = icon;
+    button.id = "emojiButton";
+    button.addEventListener("click", () => {
+      if (geoloc) {
+        alert("Turn off geolocation");
+        return;
+      }
+      mapService.moveOrigin(dir);
+      dispatchEvent(player_moved);
+    });
+    control_panel.appendChild(button);
+  }
+}
+
 globalThis.addEventListener("beforeunload", saveData);
 let origin: latlng = OAKES_CLASSROOM;
 loadData();
 const board: Board = createBoard();
-mapService.addControlPanelFunc();
+addControlPanelFunc();
 
 // Listeners
 addEventListener("player-inventory-changed", () => {
